@@ -3,11 +3,5 @@
     "api/links.js": {
       "runtime": "edge"
     }
-  },
-  "routes": [
-    {
-      "src": "/api/links",
-      "dest": "/api/links.js"
-    }
-  ]
+  }
 }
