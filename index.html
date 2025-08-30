@@ -616,869 +616,161 @@
     <div class="notification" id="notification"></div>
 
     <script>
-        class LinkManager {
-            constructor() {
-                this.apiBase = this.getInitialApiBase();
-                this.apiEndpointResolved = '';
-                this.isOnlineStorage = false; // switch to true when API reachable
-                this.links = this.loadLinks();
-                this.filteredLinks = [...this.links];
-                this.selectMode = false;
-                this.selectedIds = new Set();
-                this.maxUrlLength = 300; // เกณฑ์ URL ยาวเกิน
-                this.syncIntervalMs = 8000; // ดึงอัปเดตทุก 8 วินาที เมื่อออนไลน์
-                this.syncTimer = null;
-                this.lastServerHash = '';
-                this.initializeElements();
-                this.bindEvents();
-                this.renderLinks();
-                // Setup DnD for reordering after initial render
-                this.setupReorderDnD();
-                // Probe API availability
-                this.checkApiAvailable();
-            }
-
-            initializeElements() {
-                this.dropZone = document.getElementById('dropZone');
-                this.searchInput = document.getElementById('searchInput');
-                this.urlInput = document.getElementById('urlInput');
-                this.titleInput = document.getElementById('titleInput');
-                this.addBtn = document.getElementById('addBtn');
-                this.linksGrid = document.getElementById('linksGrid');
-                this.emptyState = document.getElementById('emptyState');
-                this.notification = document.getElementById('notification');
-                this.importBtn = document.getElementById('importBtn');
-                this.bookmarkFile = document.getElementById('bookmarkFile');
-                this.removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
-                this.clearAllBtn = document.getElementById('clearAllBtn');
-                this.checkAndCleanBtn = document.getElementById('checkAndCleanBtn');
-                this.bulkSelectToggleBtn = document.getElementById('bulkSelectToggleBtn');
-                this.bulkSelectAllBtn = document.getElementById('bulkSelectAllBtn');
-                this.bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-                this.setApiBtn = document.getElementById('setApiBtn');
-            }
-
-            bindEvents() {
-                // Drag & Drop Events
-                this.dropZone.addEventListener('dragover', this.handleDragOver.bind(this));
-                this.dropZone.addEventListener('dragleave', this.handleDragLeave.bind(this));
-                this.dropZone.addEventListener('drop', this.handleDrop.bind(this));
-
-                // Form Events
-                this.addBtn.addEventListener('click', this.handleAddLink.bind(this));
-                this.urlInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') this.handleAddLink();
-                });
-                this.titleInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') this.handleAddLink();
-                });
-
-                // Search Event
-                this.searchInput.addEventListener('input', this.handleSearch.bind(this));
-
-                // Import Events
-                this.importBtn.addEventListener('click', () => this.bookmarkFile.click());
-                this.bookmarkFile.addEventListener('change', this.handleFileImport.bind(this));
-
-                // Remove Duplicates Event
-                this.removeDuplicatesBtn.addEventListener('click', this.handleRemoveDuplicates.bind(this));
-
-                // Clear All Event
-                this.clearAllBtn.addEventListener('click', this.handleClearAll.bind(this));
-
-                // Check and clean unsafe/long URLs
-                this.checkAndCleanBtn.addEventListener('click', this.handleCheckAndClean.bind(this));
-
-                // API settings
-                this.setApiBtn.addEventListener('click', () => {
-                    const current = this.apiBase || '';
-                    const input = prompt('ใส่ URL ของ API base (เช่น https://example.com/api)\nปล่อยว่างเพื่อตั้งค่ากลับค่าเดิมหรือใช้โหมดออฟไลน์', current);
-                    if (input === null) return; // canceled
-                    const trimmed = (input || '').trim();
-                    if (trimmed) {
-                        this.setApiBase(trimmed.replace(/\/$/, ''));
-                        this.showNotification('บันทึก API base แล้ว');
-                        this.checkApiAvailable();
-                    } else {
-                        // clear
-                        localStorage.removeItem('linkManager_apiBase');
-                        this.apiBase = this.getInitialApiBase(true);
-                        this.isOnlineStorage = false;
-                        this.stopAutoSync();
-                        this.showNotification('ล้างค่า API base แล้ว (ออฟไลน์)');
-                    }
-                });
-
-                // Pause/resume autosync with page visibility
-                document.addEventListener('visibilitychange', () => {
-                    if (document.hidden) {
-                        this.stopAutoSync();
-                    } else if (this.isOnlineStorage) {
-                        this.startAutoSync();
-                    }
-                });
-
-                // Bulk select events
-                this.bulkSelectToggleBtn.addEventListener('click', this.toggleSelectMode.bind(this));
-                this.bulkSelectAllBtn.addEventListener('click', this.selectAllVisible.bind(this));
-                this.bulkDeleteBtn.addEventListener('click', this.deleteSelected.bind(this));
-
-                // Delegated clicks inside grid for selection
-                this.linksGrid.addEventListener('click', (e) => {
-                    if (!this.selectMode) return;
-                    // Prevent link navigate while selecting
-                    const a = e.target.closest('a.link-title');
-                    if (a) {
-                        e.preventDefault();
-                    }
-                    const checkbox = e.target.closest('.select-checkbox');
-                    const card = e.target.closest('.link-card');
-                    if (!card) return;
-                    const id = Number(card.dataset.id);
-                    if (checkbox) {
-                        // Checkbox toggled naturally, sync state
-                        if (checkbox.checked) this.selectedIds.add(id); else this.selectedIds.delete(id);
-                        this.syncCardSelectionUI(card, id);
-                        this.updateBulkButtonsState();
-                    } else if (!e.target.closest('button')) {
-                        // Toggle by clicking card area
-                        if (this.selectedIds.has(id)) this.selectedIds.delete(id); else this.selectedIds.add(id);
-                        this.syncCardSelectionUI(card, id);
-                        this.updateBulkButtonsState();
-                    }
-                });
-            }
-
-            handleCheckAndClean() {
-                if (this.links.length === 0) {
-                    this.showNotification('ไม่มีลิงก์ให้ตรวจสอบ', 'error');
-                    return;
+        // ฟังก์ชันสำหรับโหลดข้อมูลจาก API (เปลี่ยนจาก PHP เป็น JS API)
+        async function loadLinks() {
+            try {
+                const response = await fetch('/api/links');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-
-                const report = this.findUnsafeOrLongLinks();
-                const total = report.items.length;
-                if (total === 0) {
-                    this.showNotification('ไม่พบลิงก์ไม่ปลอดภัยหรือ URL ยาวเกิน');
-                    return;
-                }
-
-                const msgLines = [];
-                msgLines.push(`พบลิงก์ที่อาจไม่ปลอดภัย/ยาวเกิน ${total} รายการ`);
-                if (report.counts.unsafeProtocol > 0) msgLines.push(`- โปรโตคอลไม่ปลอดภัย (javascript:, data:, file:) ${report.counts.unsafeProtocol}`);
-                if (report.counts.nonHttps > 0) msgLines.push(`- ไม่ใช่ HTTPS ${report.counts.nonHttps}`);
-                if (report.counts.tooLong > 0) msgLines.push(`- URL ยาวเกิน ${this.maxUrlLength} ตัวอักษร ${report.counts.tooLong}`);
-                if (report.counts.punycode > 0) msgLines.push(`- โดเมน Punycode (xn--) ${report.counts.punycode}`);
-                const samples = report.items.slice(0, 10).map(it => `• ${it.link.title} — ${it.link.url.substring(0, 80)}${it.link.url.length>80?'…':''}`);
-                if (samples.length) {
-                    msgLines.push('\nตัวอย่าง:');
-                    msgLines.push(...samples);
-                }
-                msgLines.push('\nคุณต้องการลบรายการเหล่านี้ทั้งหมดหรือไม่?');
-
-                const confirmed = confirm(msgLines.join('\n'));
-                if (!confirmed) return;
-
-                const flagged = new Set(report.items.map(i => i.link.id));
-                const before = this.links.length;
-                this.links = this.links.filter(l => !flagged.has(l.id));
-                const removed = before - this.links.length;
-                this.saveLinks();
-                this.handleSearch();
-                this.showNotification(`ลบลิงก์ที่เสี่ยง/ยาวเกิน ${removed} รายการแล้ว`);
-            }
-
-            findUnsafeOrLongLinks() {
-                const counts = { unsafeProtocol: 0, nonHttps: 0, tooLong: 0, punycode: 0 };
-                const items = [];
-                const seen = new Set();
-                const MAX = this.maxUrlLength || 300;
-
-                this.links.forEach(link => {
-                    let reasons = [];
-                    try {
-                        const u = new URL(link.url.startsWith('http') ? link.url : 'https://' + link.url);
-                        const proto = u.protocol.toLowerCase();
-                        if (proto === 'javascript:' || proto === 'data:' || proto === 'file:') {
-                            reasons.push('unsafeProtocol');
-                        } else if (proto === 'http:') {
-                            reasons.push('nonHttps');
-                        }
-                        if (u.hostname && u.hostname.startsWith('xn--')) {
-                            reasons.push('punycode');
-                        }
-                    } catch {
-                        // ถ้า parse URL ไม่ได้ ให้ถือว่าเสี่ยง
-                        reasons.push('unsafeProtocol');
-                    }
-                    if ((link.url || '').length > MAX) {
-                        reasons.push('tooLong');
-                    }
-
-                    if (reasons.length) {
-                        const key = link.id;
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            items.push({ link, reasons });
-                            // นับประเภทแบบ unique ต่อรายการ
-                            const uniq = new Set(reasons);
-                            if (uniq.has('unsafeProtocol')) counts.unsafeProtocol++;
-                            if (uniq.has('nonHttps')) counts.nonHttps++;
-                            if (uniq.has('tooLong')) counts.tooLong++;
-                            if (uniq.has('punycode')) counts.punycode++;
-                        }
-                    }
-                });
-
-                return { counts, items };
-            }
-
-            // Drag-and-drop reordering within the grid
-            setupReorderDnD() {
-                let dragSrcEl = null;
-                let dragSrcId = null;
-
-                const onDragStart = (e) => {
-                    if (this.selectMode) {
-                        e.preventDefault();
-                        return;
-                    }
-                    const card = e.currentTarget;
-                    dragSrcEl = card;
-                    dragSrcId = Number(card.dataset.id);
-                    card.classList.add('dragging');
-                    e.dataTransfer.effectAllowed = 'move';
-                    // Set a dummy data to enable DnD on Firefox
-                    e.dataTransfer.setData('text/plain', '');
-                };
-
-                const onDragEnd = (e) => {
-                    const card = e.currentTarget;
-                    card.classList.remove('dragging');
-                    this.linksGrid.querySelectorAll('.link-card').forEach(el => el.classList.remove('drag-over'));
-                };
-
-                const onDragOver = (e) => {
-                    if (this.selectMode) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
-                    const target = e.currentTarget;
-                    if (target !== dragSrcEl) {
-                        target.classList.add('drag-over');
-                    }
-                };
-
-                const onDragLeave = (e) => {
-                    e.currentTarget.classList.remove('drag-over');
-                };
-
-                const onDrop = (e) => {
-                    if (this.selectMode) return;
-                    e.preventDefault();
-                    const target = e.currentTarget;
-                    target.classList.remove('drag-over');
-                    if (!dragSrcEl || target === dragSrcEl) return;
-
-                    const srcId = dragSrcId;
-                    const targetId = Number(target.dataset.id);
-
-                    // Reorder this.links based on filtered view positions
-                    const srcIndex = this.links.findIndex(l => l.id === srcId);
-                    const targetIndex = this.links.findIndex(l => l.id === targetId);
-                    if (srcIndex === -1 || targetIndex === -1) return;
-
-                    const [moved] = this.links.splice(srcIndex, 1);
-                    this.links.splice(targetIndex, 0, moved);
-                    this.saveLinks();
-                    this.handleSearch(); // re-render with current filter
-                    this.showNotification('สลับตำแหน่งแล้ว');
-                };
-
-                // Attach listeners to current cards
-                const attach = () => {
-                    this.linksGrid.querySelectorAll('.link-card').forEach(card => {
-                        card.setAttribute('draggable', 'true');
-                        card.addEventListener('dragstart', onDragStart);
-                        card.addEventListener('dragend', onDragEnd);
-                        card.addEventListener('dragover', onDragOver);
-                        card.addEventListener('dragleave', onDragLeave);
-                        card.addEventListener('drop', onDrop);
+                const links = await response.json();
+                const linksContainer = document.getElementById('linksGrid'); // Corrected ID
+                linksContainer.innerHTML = '';
+                if (links && links.length > 0) {
+                    links.forEach(link => {
+                        // Assuming createLinkElement exists and works as before
+                        const linkElement = createLinkElement(link.url, link.title);
+                        linksContainer.appendChild(linkElement);
                     });
-                };
-
-                // Initial attach and re-attach on future renders
-                const observer = new MutationObserver(() => attach());
-                observer.observe(this.linksGrid, { childList: true });
-                attach();
-            }
-
-            handleDragOver(e) {
-                e.preventDefault();
-                this.dropZone.classList.add('drag-over');
-            }
-
-            handleDragLeave(e) {
-                if (!this.dropZone.contains(e.relatedTarget)) {
-                    this.dropZone.classList.remove('drag-over');
                 }
-            }
-
-            handleDrop(e) {
-                e.preventDefault();
-                this.dropZone.classList.remove('drag-over');
-
-                const url = this.getFirstUrlFromDataTransfer(e.dataTransfer);
-                if (url) {
-                    this.addLink(url);
-                    this.showNotification('เพิ่มลิงค์สำเร็จ! 🎉');
-                } else {
-                    this.showNotification('ไม่พบลิงค์ที่ถูกต้อง', 'error');
-                }
-            }
-
-            getFirstUrlFromDataTransfer(dataTransfer) {
-                const text = dataTransfer.getData('text/plain');
-                const html = dataTransfer.getData('text/html');
-                
-                // Check plain text first
-                if (this.isValidUrl(text)) {
-                    return text;
-                }
-
-                // Extract URL from HTML
-                if (html) {
-                    const urlMatch = html.match(/https?:\/\/[^\s"'>]+/i);
-                    if (urlMatch && this.isValidUrl(urlMatch[0])) {
-                        return urlMatch[0];
-                    }
-                }
-
-                return null;
-            }
-
-            handleAddLink() {
-                const url = this.urlInput.value.trim();
-                const title = this.titleInput.value.trim();
-
-                if (!url) {
-                    this.showNotification('กรุณาใส่ลิงค์', 'error');
-                    return;
-                }
-
-                if (!this.isValidUrl(url)) {
-                    this.showNotification('ลิงค์ไม่ถูกต้อง', 'error');
-                    return;
-                }
-
-                this.addLink(url, title);
-                this.urlInput.value = '';
-                this.titleInput.value = '';
-                this.showNotification('เพิ่มลิงค์สำเร็จ! 🎉');
-            }
-
-            addLink(url, title = '') {
-                // Ensure URL has protocol
-                if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                    url = 'https://' + url;
-                }
-
-                const link = {
-                    id: Date.now(),
-                    url: url,
-                    title: title || this.extractDomainFromUrl(url),
-                    favicon: this.getFaviconUrl(url),
-                    dateAdded: new Date().toISOString()
-                };
-
-                // Add to beginning of array (newest first)
-                this.links.unshift(link);
-                this.saveLinks();
-                this.handleSearch(); // Refresh filtered results
-            }
-
-            deleteLink(id) {
-                this.links = this.links.filter(link => link.id !== id);
-                this.saveLinks();
-                this.handleSearch(); // Refresh filtered results
-                this.showNotification('ลบลิงค์แล้ว');
-            }
-
-            handleSearch() {
-                const query = this.searchInput.value.toLowerCase().trim();
-                
-                if (!query) {
-                    this.filteredLinks = [...this.links];
-                } else {
-                    this.filteredLinks = this.links.filter(link => 
-                        link.title.toLowerCase().includes(query) || 
-                        link.url.toLowerCase().includes(query)
-                    );
-                }
-                
-                this.renderLinks();
-                this.updateBulkButtonsState();
-            }
-
-            renderLinks() {
-                if (this.filteredLinks.length === 0) {
-                    this.linksGrid.style.display = 'none';
-                    this.emptyState.style.display = 'block';
-                    return;
-                }
-
-                this.linksGrid.style.display = 'grid';
-                this.emptyState.style.display = 'none';
-
-                this.linksGrid.innerHTML = this.filteredLinks.map(link => `
-                    <div class="link-card ${this.selectedIds.has(link.id) ? 'selected' : ''}" data-id="${link.id}">
-                        <div class="link-header">
-                            <img src="${link.favicon}" alt="favicon" class="link-favicon" 
-                                 onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%2364748b%22><path d=%22M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z%22/></svg>'">
-                            <input type="checkbox" class="select-checkbox" ${this.selectedIds.has(link.id) ? 'checked' : ''} />
-                            <a href="${link.url}" target="_blank" class="link-title" title="${link.title}">
-                                ${link.title}
-                            </a>
-                        </div>
-                        <div class="link-url">${link.url}</div>
-                        <div class="link-actions">
-                            <button class="btn btn-delete" onclick="linkManager.deleteLink(${link.id})">
-                                🗑️ ลบ
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
-
-                // Toggle select-mode class on container
-                if (this.selectMode) {
-                    this.containerClassListAdd('select-mode');
-                } else {
-                    this.containerClassListRemove('select-mode');
-                }
-            }
-
-            containerClassListAdd(cls){
-                // Add a helper to add class on root container for CSS scope
-                document.querySelector('.container')?.classList.add(cls);
-            }
-
-            containerClassListRemove(cls){
-                document.querySelector('.container')?.classList.remove(cls);
-            }
-
-            toggleSelectMode(){
-                this.selectMode = !this.selectMode;
-                if (!this.selectMode) {
-                    this.selectedIds.clear();
-                }
-                this.bulkSelectToggleBtn.textContent = this.selectMode ? '✅ ออกจากโหมดเลือก' : '✅ เลือกหลายรายการ';
-                // Enable select all when in select mode and there is something visible
-                this.bulkSelectAllBtn.disabled = !this.selectMode || this.filteredLinks.length === 0;
-                this.renderLinks();
-                this.updateBulkButtonsState();
-            }
-
-            selectAllVisible(){
-                if (!this.selectMode) return;
-                this.filteredLinks.forEach(l => this.selectedIds.add(l.id));
-                this.renderLinks();
-                this.updateBulkButtonsState();
-            }
-
-            deleteSelected(){
-                if (this.selectedIds.size === 0) return;
-                const count = this.selectedIds.size;
-                const confirmed = confirm(`ต้องการลบลิงก์ที่เลือก ${count} รายการหรือไม่?\nการกระทำนี้ไม่สามารถยกเลิกได้`);
-                if (!confirmed) return;
-
-                this.links = this.links.filter(l => !this.selectedIds.has(l.id));
-                this.selectedIds.clear();
-                this.saveLinks();
-                this.handleSearch();
-                this.updateBulkButtonsState();
-                this.showNotification(`ลบลิงก์ ${count} รายการแล้ว`);
-            }
-
-            syncCardSelectionUI(card, id){
-                if (this.selectedIds.has(id)) card.classList.add('selected'); else card.classList.remove('selected');
-                const cb = card.querySelector('.select-checkbox');
-                if (cb) cb.checked = this.selectedIds.has(id);
-            }
-
-            updateBulkButtonsState(){
-                const count = this.selectedIds.size;
-                this.bulkDeleteBtn.disabled = !this.selectMode || count === 0;
-                this.bulkDeleteBtn.textContent = `🗑️ ลบที่เลือก (${count})`;
-                this.bulkSelectAllBtn.disabled = !this.selectMode || this.filteredLinks.length === 0;
-            }
-
-            getFaviconUrl(url) {
-                try {
-                    const domain = new URL(url).hostname;
-                    return `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
-                } catch {
-                    return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%2364748b"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>';
-                }
-            }
-
-            extractDomainFromUrl(url) {
-                try {
-                    return new URL(url).hostname.replace('www.', '');
-                } catch {
-                    return url;
-                }
-            }
-
-            isValidUrl(string) {
-                try {
-                    const url = new URL(string.startsWith('http') ? string : 'https://' + string);
-                    return url.protocol === 'http:' || url.protocol === 'https:';
-                } catch {
-                    return false;
-                }
-            }
-
-            saveLinks() {
-                if (this.isOnlineStorage) {
-                    this.syncAllToServer();
-                } else {
-                    localStorage.setItem('linkManager_links', JSON.stringify(this.links));
-                }
-            }
-
-            loadLinks() {
-                try {
-                    const saved = localStorage.getItem('linkManager_links');
-                    return saved ? JSON.parse(saved) : [];
-                } catch {
-                    return [];
-                }
-            }
-
-            async checkApiAvailable() {
-                const base = this.apiBase;
-                if (!base) return; // stay offline
-                try {
-                    const resolved = await this.resolveApiEndpoint(base);
-                    if (!resolved) throw new Error('API ไม่พร้อมใช้งาน');
-                    this.apiEndpointResolved = resolved;
-                    const serverLinks = await this.fetchServerLinks(resolved);
-                    if (!Array.isArray(serverLinks)) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
-                    this.isOnlineStorage = true;
-                    // Prefer server order if exists
-                    this.links = serverLinks.length ? serverLinks : this.links;
-                    if (serverLinks.length === 0 && this.links.length > 0) {
-                        await this.syncAllToServer();
-                    }
-                    this.handleSearch();
-                    this.lastServerHash = this.computeHash(this.links);
-                    this.showNotification(`โหมดออนไลน์: ใช้ ${this.apiEndpointResolved}`);
-                    this.startAutoSync();
-                } catch (err) {
-                    // stay offline, but notify briefly in console
-                    console.warn('API unavailable:', err?.message || err);
-                }
-            }
-
-            async resolveApiEndpoint(base) {
-                const candidates = [];
-                const trimmed = base.replace(/\/$/, '');
-                // If looks like full endpoint already
-                if (/links(\.php)?$/.test(trimmed)) {
-                    candidates.push(trimmed);
-                } else {
-                    candidates.push(`${trimmed}/links.php`);
-                    candidates.push(`${trimmed}/links`);
-                }
-                for (const url of candidates) {
-                    try {
-                        const r = await fetch(url, { method: 'GET', cache: 'no-store' });
-                        if (r.ok) {
-                            const j = await r.json();
-                            if (Array.isArray(j)) return url;
-                        }
-                    } catch {}
-                }
-                return '';
-            }
-
-        async syncAllToServer() {
-                try {
-            const endpoint = this.apiEndpointResolved || (await this.resolveApiEndpoint(this.apiBase));
-            if (!this.isOnlineStorage || !endpoint) throw new Error('offline');
-            const res = await fetch(endpoint, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(this.links)
-                    });
-                    if (!res.ok) throw new Error('sync failed');
-                    this.lastServerHash = this.computeHash(this.links);
-                } catch {
-                    // fallback local if failed
-                    localStorage.setItem('linkManager_links', JSON.stringify(this.links));
-                }
-            }
-
-            async fetchServerLinks(endpointOverride = '') {
-                const endpoint = endpointOverride || this.apiEndpointResolved || (await this.resolveApiEndpoint(this.apiBase));
-                const res = await fetch(endpoint, { method: 'GET', cache: 'no-store' });
-                if (!res.ok) throw new Error(`API ${res.status}`);
-                return res.json();
-            }
-
-            computeHash(list) {
-                try {
-                    // Simple deterministic hash from JSON string
-                    const s = JSON.stringify(list);
-                    let h = 0;
-                    for (let i = 0; i < s.length; i++) {
-                        h = ((h << 5) - h) + s.charCodeAt(i);
-                        h |= 0;
-                    }
-                    return String(h);
-                } catch {
-                    return String(Date.now());
-                }
-            }
-
-            startAutoSync() {
-                this.stopAutoSync();
-                if (!this.isOnlineStorage) return;
-                this.syncTimer = setInterval(async () => {
-                    try {
-                        const serverLinks = await this.fetchServerLinks();
-                        const serverHash = this.computeHash(serverLinks);
-                        if (serverHash !== this.lastServerHash) {
-                            this.links = serverLinks;
-                            localStorage.setItem('linkManager_links', JSON.stringify(this.links));
-                            this.lastServerHash = serverHash;
-                            this.handleSearch();
-                        }
-                    } catch (e) {
-                        // temporary failure: keep offline cache and retry next tick
-                    }
-                }, this.syncIntervalMs);
-            }
-
-            stopAutoSync() {
-                if (this.syncTimer) {
-                    clearInterval(this.syncTimer);
-                    this.syncTimer = null;
-                }
-            }
-
-            getInitialApiBase(resetToDefault = false) {
-                // Priority: URL param ?api=... -> localStorage -> default
-                if (!resetToDefault) {
-                    const url = new URL(window.location.href);
-                    const apiParam = url.searchParams.get('api');
-                    if (apiParam) {
-                        const base = apiParam.replace(/\/$/, '');
-                        localStorage.setItem('linkManager_apiBase', base);
-                        return base;
-                    }
-                    const saved = localStorage.getItem('linkManager_apiBase');
-                    if (saved) return saved;
-                }
-                // Default: if app is served under /super_link/, assume API at /super_link/api on same host
-                if (location.pathname.includes('/super_link/')) return '/super_link/api';
-                // Or if localhost XAMPP
-                if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return '/super_link/api';
-                // Otherwise no default API (offline until user sets one)
-                return '';
-            }
-
-            setApiBase(base) {
-                this.apiBase = base;
-                localStorage.setItem('linkManager_apiBase', base);
-            }
-
-            handleFileImport(e) {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    try {
-                        const content = event.target.result;
-                        let importedLinks = [];
-
-                        if (file.name.endsWith('.json')) {
-                            importedLinks = this.parseJsonBookmarks(content);
-                        } else if (file.name.endsWith('.html')) {
-                            importedLinks = this.parseHtmlBookmarks(content);
-                        }
-
-                        if (importedLinks.length > 0) {
-                            this.importLinks(importedLinks);
-                            this.showNotification(`นำเข้า ${importedLinks.length} ลิงค์สำเร็จ! 🎉`);
-                        } else {
-                            this.showNotification('ไม่พบลิงค์ในไฟล์', 'error');
-                        }
-                    } catch (error) {
-                        this.showNotification('ไม่สามารถอ่านไฟล์ได้', 'error');
-                    }
-                };
-                reader.readAsText(file);
-                
-                // Reset file input
-                e.target.value = '';
-            }
-
-            parseJsonBookmarks(content) {
-                try {
-                    const data = JSON.parse(content);
-                    const links = [];
-
-                    // Handle different JSON formats
-                    if (Array.isArray(data)) {
-                        // Simple array format
-                        data.forEach(item => {
-                            if (item.url || item.href) {
-                                links.push({
-                                    url: item.url || item.href,
-                                    title: item.title || item.name || this.extractDomainFromUrl(item.url || item.href)
-                                });
-                            }
-                        });
-                    } else if (data.bookmarks || data.children) {
-                        // Chrome/Firefox export format
-                        this.extractLinksFromBookmarkTree(data.bookmarks || data.children, links);
-                    }
-
-                    return links;
-                } catch {
-                    return [];
-                }
-            }
-
-            parseHtmlBookmarks(content) {
-                const links = [];
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(content, 'text/html');
-                const anchors = doc.querySelectorAll('a[href]');
-
-                anchors.forEach(anchor => {
-                    const url = anchor.getAttribute('href');
-                    const title = anchor.textContent.trim() || this.extractDomainFromUrl(url);
-                    
-                    if (this.isValidUrl(url)) {
-                        links.push({ url, title });
-                    }
-                });
-
-                return links;
-            }
-
-            extractLinksFromBookmarkTree(nodes, links) {
-                if (!Array.isArray(nodes)) return;
-
-                nodes.forEach(node => {
-                    if (node.url && this.isValidUrl(node.url)) {
-                        links.push({
-                            url: node.url,
-                            title: node.name || node.title || this.extractDomainFromUrl(node.url)
-                        });
-                    }
-                    
-                    if (node.children) {
-                        this.extractLinksFromBookmarkTree(node.children, links);
-                    }
-                });
-            }
-
-            importLinks(importedLinks) {
-                let addedCount = 0;
-                
-                importedLinks.forEach(linkData => {
-                    // Check if link already exists
-                    const exists = this.links.some(existing => existing.url === linkData.url);
-                    
-                    if (!exists) {
-                        const link = {
-                            id: Date.now() + Math.random(),
-                            url: linkData.url,
-                            title: linkData.title,
-                            favicon: this.getFaviconUrl(linkData.url),
-                            dateAdded: new Date().toISOString()
-                        };
-                        
-                        this.links.unshift(link);
-                        addedCount++;
-                    }
-                });
-
-                if (addedCount > 0) {
-                    this.saveLinks();
-                    this.handleSearch();
-                }
-
-                return addedCount;
-            }
-
-            handleRemoveDuplicates() {
-                if (this.links.length === 0) {
-                    this.showNotification('ไม่มีลิงค์ให้ตรวจสอบ', 'error');
-                    return;
-                }
-
-                const originalCount = this.links.length;
-                const uniqueLinks = [];
-                const seenUrls = new Set();
-
-                // Keep only unique URLs (first occurrence)
-                this.links.forEach(link => {
-                    const normalizedUrl = link.url.toLowerCase().replace(/\/$/, ''); // Remove trailing slash and convert to lowercase
-                    if (!seenUrls.has(normalizedUrl)) {
-                        seenUrls.add(normalizedUrl);
-                        uniqueLinks.push(link);
-                    }
-                });
-
-                const duplicatesCount = originalCount - uniqueLinks.length;
-
-                if (duplicatesCount === 0) {
-                    this.showNotification('ไม่พบลิงค์ซ้ำ! ✨');
-                    return;
-                }
-
-                const confirmed = confirm(`พบลิงค์ซ้ำ ${duplicatesCount} รายการ\nคุณต้องการลบลิงค์ซ้ำหรือไม่?`);
-                
-                if (confirmed) {
-                    this.links = uniqueLinks;
-                    this.saveLinks();
-                    this.handleSearch();
-                    this.showNotification(`ลบลิงค์ซ้ำ ${duplicatesCount} รายการแล้ว! 🧹`);
-                }
-            }
-
-            handleClearAll() {
-                if (this.links.length === 0) {
-                    this.showNotification('ไม่มีข้อมูลให้ล้าง', 'error');
-                    return;
-                }
-
-                const confirmed = confirm(`คุณแน่ใจหรือไม่ที่จะลบลิงค์ทั้งหมด ${this.links.length} รายการ?\n\nการกระทำนี้ไม่สามารถยกเลิกได้`);
-                
-                if (confirmed) {
-                    this.links = [];
-                    this.saveLinks();
-                    this.handleSearch();
-                    this.showNotification('ล้างข้อมูลทั้งหมดแล้ว! 🧹');
-                }
-            }
-
-            showNotification(message, type = 'success') {
-                this.notification.textContent = message;
-                this.notification.className = `notification ${type}`;
-                this.notification.classList.add('show');
-
-                setTimeout(() => {
-                    this.notification.classList.remove('show');
-                }, 3000);
+                 updateUI(); // Update UI after loading
+            } catch (error) {
+                console.error('Error loading links:', error);
+                updateUI(); // Also update UI on error
             }
         }
 
-        // Initialize the app
-        const linkManager = new LinkManager();
+        // ฟังก์ชันสำหรับบันทึกข้อมูลไปยัง API (เปลี่ยนจาก PHP เป็น JS API)
+        async function saveLinks() {
+            try {
+                const linksContainer = document.getElementById('linksGrid'); // Corrected ID
+                const links = [];
+                linksContainer.querySelectorAll('.link-card').forEach(item => { // Corrected selector
+                    const anchor = item.querySelector('a.link-title');
+                    if(anchor) {
+                        links.push({
+                            url: anchor.href,
+                            title: anchor.textContent.trim()
+                        });
+                    }
+                });
+
+                await fetch('/api/links', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(links),
+                });
+            } catch (error) {
+                console.error('Error saving links:', error);
+            }
+        }
+        
+        // --- All the existing class LinkManager code can be removed or refactored ---
+        // --- For now, we will add simplified functions to make the UI work with the new API ---
+
+        const dropZone = document.getElementById('dropZone');
+        const searchInput = document.getElementById('searchInput');
+        const urlInput = document.getElementById('urlInput');
+        const titleInput = document.getElementById('titleInput');
+        const addBtn = document.getElementById('addBtn');
+        const linksGrid = document.getElementById('linksGrid');
+        const emptyState = document.getElementById('emptyState');
+        const notification = document.getElementById('notification');
+        const importBtn = document.getElementById('importBtn');
+        const bookmarkFile = document.getElementById('bookmarkFile');
+        const removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+
+        function createLinkElement(url, title) {
+            const domain = new URL(url).hostname;
+            const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+
+            const card = document.createElement('div');
+            card.className = 'link-card';
+            card.innerHTML = `
+                <div class="link-header">
+                    <img src="${faviconUrl}" alt="favicon" class="link-favicon" 
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%2364748b%22><path d=%22M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z%22/></svg>'">
+                    <a href="${url}" target="_blank" class="link-title" title="${title}">
+                        ${title}
+                    </a>
+                </div>
+                <div class="link-url">${url}</div>
+                <div class="link-actions">
+                    <button class="btn btn-delete">🗑️ ลบ</button>
+                </div>
+            `;
+            card.querySelector('.btn-delete').addEventListener('click', (e) => {
+                e.stopPropagation();
+                card.remove();
+                saveLinks();
+                showNotification('ลบลิงค์แล้ว');
+            });
+            return card;
+        }
+        
+        function updateUI() {
+            if (linksGrid.children.length === 0) {
+                linksGrid.style.display = 'none';
+                emptyState.style.display = 'block';
+            } else {
+                linksGrid.style.display = 'grid';
+                emptyState.style.display = 'none';
+            }
+        }
+
+        function showNotification(message, type = 'success') {
+            notification.textContent = message;
+            notification.className = `notification ${type}`;
+            notification.classList.add('show');
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        function isValidUrl(string) {
+            try {
+                const url = new URL(string.startsWith('http') ? string : 'https://' + string);
+                return url.protocol === 'http:' || url.protocol === 'https:';
+            } catch {
+                return false;
+            }
+        }
+
+        addBtn.addEventListener('click', () => {
+            const url = urlInput.value.trim();
+            const title = titleInput.value.trim() || new URL(url).hostname.replace('www.','');
+
+            if (!url || !isValidUrl(url)) {
+                showNotification('กรุณาใส่ลิงค์ที่ถูกต้อง', 'error');
+                return;
+            }
+
+            const linkElement = createLinkElement(url, title);
+            linksGrid.prepend(linkElement); // Add to top
+            
+            urlInput.value = '';
+            titleInput.value = '';
+            
+            saveLinks();
+            updateUI();
+            showNotification('เพิ่มลิงค์สำเร็จ! 🎉');
+        });
+
+        clearAllBtn.addEventListener('click', () => {
+             if (confirm('คุณแน่ใจหรือไม่ที่จะลบลิงค์ทั้งหมด?')) {
+                linksGrid.innerHTML = '';
+                saveLinks();
+                updateUI();
+                showNotification('ล้างข้อมูลทั้งหมดแล้ว');
+             }
+        });
+        
+        // Initial load
+        document.addEventListener('DOMContentLoaded', loadLinks);
+
     </script>
 <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'976a1708178ad43a',t:'MTc1NjQ0OTk3Mi4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
