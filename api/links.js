@@ -1,9 +1,5 @@
 import { kv } from '@vercel/kv';
 
-export const config = {
-  runtime: 'edge',
-};
-
 export default async function handler(request) {
   try {
     // Handle GET request to fetch links
